@@ -1,0 +1,8 @@
+CompileFlags:
+  Add:
+    - -std=c++17
+    - -I.
+    # header files for pybind11 and numpy
+    - -I/home/yazhu/miniconda3/lib/python3.13/site-packages/pybind11/include
+    - -I/home/yazhu/miniconda3/lib/python3.13/site-packages/numpy/_core/include
+    - -I/home/yazhu/miniconda3/include/python3.13
