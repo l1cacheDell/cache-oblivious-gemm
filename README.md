@@ -19,7 +19,7 @@ python main.py
 
 <div style="text-align:center; margin: 1rem 0;">
   <img src="figures/performance.png" alt="示例图片" width="100%" />
-  <div style="font-size:0.9rem; color:#6b7280; margin-top:0.25rem;">
+  <div style="font-size:0.9rem; color:#6b7280; margin-top:0.25rem; text-align:center;">
     Cache-Oblivious GEMM Performance benchmark
   </div>
 </div>
