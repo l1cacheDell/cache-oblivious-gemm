@@ -21,6 +21,9 @@ def check_correctness(a: np.ndarray, b: np.ndarray, version=1, tile_base=64):
         case 6:
             C = cogemm.gemm_f32_v6(a_col, b_col)
             C = np.transpose(C)  # back to row-major
+        case 7:
+            C = cogemm.gemm_f32_v7(a_col, b_col)
+            C = np.transpose(C)  # back to row-major
         case _:
             raise ValueError("Unsupported version")
 
@@ -49,6 +52,8 @@ def profile_gemm(a: np.ndarray, b: np.ndarray, repeat=10, version=1, tile_base=6
                 c = cogemm.gemm_f32_v5(a, b)
             case 6:
                 c = cogemm.gemm_f32_v6(a_col, b_col)
+            case 7:
+                c = cogemm.gemm_f32_v7(a_col, b_col)
             case _:
                 raise ValueError("Unsupported version")
     t1 = time.perf_counter()
@@ -58,7 +63,7 @@ def profile_gemm(a: np.ndarray, b: np.ndarray, repeat=10, version=1, tile_base=6
     # profile potential float operations
     flops = 2.0 * M * K * N
     gflops = flops / ((t1 - t0) / repeat) / 1e9
-    print(f"size: {M}, tile_base: {tile_base}, time: {t1 - t0:.4f}s, REPEAT: {repeat}, {gflops:.2f} GFLOP/s")
+    print(f"v{version}, size: {M}, tile_base: {tile_base}, time: {t1 - t0:.4f}s, REPEAT: {repeat}, {gflops:.2f} GFLOP/s")
     return gflops
 
 
@@ -92,7 +97,7 @@ def check_and_bench(M=512, K=512, N=512, seed=0):
 
     bench_data = []
 
-    total_version = 6
+    total_version = 7
 
     for version_id in range(1, total_version + 1):     # here, to add more versions, increase the range
         if version_id >= 4:
