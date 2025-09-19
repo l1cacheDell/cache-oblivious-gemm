@@ -12,7 +12,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 
-#include "gemm_5206.h"
+#include "cogemm.h"
 
 using namespace std;    // avoid using this in production :)
 namespace py = pybind11;

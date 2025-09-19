@@ -16,7 +16,7 @@ extra_link_args += ["-fopenmp"]
 ext_modules = [
     Pybind11Extension(
         "cogemm",                           # co -> cache-oblivious
-        sources=["gemm_5206.cpp"],
+        sources=["cogemm.cpp"],
         include_dirs=[np.get_include()],
         cxx_std=cxx_std,
         extra_compile_args=extra_compile_args,
@@ -27,7 +27,7 @@ ext_modules = [
 setup(
     name="cogemm",
     version="0.1.0",
-    description="Minimal cache oblivious gemm environment field for CEG5206",
+    description="Minimal cache oblivious gemm environment field",
     ext_modules=ext_modules,
     cmdclass={"build_ext": build_ext},
     zip_safe=False,
