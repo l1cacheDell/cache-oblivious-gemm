@@ -37,7 +37,7 @@ void sgemm_v2(float* a, float* b, float* c, const size_t M, const size_t N, cons
     // use multi thread to handle this GEMM process
     const int TILE_SIZE_X = M / (NUM_THREADS / 2);  // ------------ > x, the horizon
     const int TILE_SIZE_Y = N / (2);                // y, the vertical
-    #pragma omp parallel num_threads(NUM_THREADS)
+    #pragma omp parallel num_threads(NUM_THREADS) proc_bind(spread)
     {
         const int total_threads = omp_get_num_threads();
         const int tid = omp_get_thread_num();       // current tid, same programming model as cuda
@@ -106,7 +106,7 @@ void sgemm_v3(float* a, float* b, float* c, const size_t M, const size_t N, cons
 
     constexpr int TILE_SIZE = 64;
 
-    #pragma omp parallel num_threads(NUM_THREADS)
+    #pragma omp parallel num_threads(NUM_THREADS) proc_bind(spread)
     {
         const int tid = omp_get_thread_num();       // current tid, same programming model as cuda
         const int tile_id_x = tid % (NUM_THREADS / 2);  // 0, 1, 2, 3
@@ -200,7 +200,7 @@ void sgemm_v4(float* a, float* b, float* c, const size_t M, const size_t N, cons
     // const int tiles_x = 1;   // 4
     // const int tiles_y = 1;                 // 2
 
-    #pragma omp parallel num_threads(NUM_THREADS)
+    #pragma omp parallel num_threads(NUM_THREADS) proc_bind(spread)
     {
         const int tid = omp_get_thread_num();
         const int tx  = tid % tiles_x;     // 0..3
@@ -354,7 +354,7 @@ void sgemm_v5(float* a, float* b, float* c,
     // const int tiles_x = 1;   // 4
     // const int tiles_y = 1;                 // 2
 
-    #pragma omp parallel num_threads(NUM_THREADS)
+    #pragma omp parallel num_threads(NUM_THREADS) proc_bind(spread)
     {
         const int tid = omp_get_thread_num();
         const int tx  = tid % tiles_x;     // 0..3
@@ -579,7 +579,7 @@ void sgemm_v6(float* a, float* b, float* c,
     // const int tiles_x = 1;   // 4
     // const int tiles_y = 1;                 // 2
 
-    #pragma omp parallel num_threads(NUM_THREADS)
+    #pragma omp parallel num_threads(NUM_THREADS) proc_bind(spread)
     {
         const int tid = omp_get_thread_num();
         const int tx  = tid % tiles_x;     // 0..3
@@ -898,7 +898,7 @@ void sgemm_v7(float* a, float* b, float* c,
     // const int tiles_x = 1;   // 4
     // const int tiles_y = 1;                 // 2
 
-    #pragma omp parallel num_threads(NUM_THREADS)
+    #pragma omp parallel num_threads(NUM_THREADS) proc_bind(spread)
     {
         const int tid = omp_get_thread_num();
         const int tx  = tid % tiles_x;     // 0..3

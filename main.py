@@ -82,7 +82,7 @@ def check_and_bench_only_v4(M=512, K=512, N=512, seed=0):
         if version_id == 4:
             for tile_base in [16, 32, 48, 64, 96, 128]:
                 check_correctness(A, B, version=version_id, tile_base=tile_base)
-                gflops = profile_gemm(A, B, repeat=10, version=version_id, tile_base=tile_base)
+                gflops = profile_gemm(A, B, repeat=50, version=version_id, tile_base=tile_base)
                 bench_data.append((M, f'v{version_id}-t{tile_base}', gflops))
         else:
             gflops = profile_gemm(A, B, repeat=10, version=version_id)
@@ -128,7 +128,7 @@ if __name__ == "__main__":
         plt.plot(xs, ys, marker='o', linewidth=2, label=ver)
 
     # set to (0, 60), because the max gflops oneAPI MKL can reach is about 55 GFLOPS on my machine
-    plt.ylim(0, 170)
+    plt.ylim(0, 200)
 
     plt.title("GEMM GFLOPS vs Matrix Size")
     plt.xlabel("Matrix size (n in MxNxK)")

@@ -10,6 +10,16 @@ sudo apt install -y build-essential
 
 # install package
 python setup.py install
+```
+
+### Running the benchmark
+
+```bash
+# env
+export OMP_NUM_THREADS=<your physical CPU core>       # 8 recommended
+export OMP_PLACES=cores                               # mapping to physical cores
+export OMP_PROC_BIND=spread                           # spread to different places
+export OMP_DYNAMIC=FALSE                              # disallow dynamic changing threads
 
 # run the test script
 python main.py
