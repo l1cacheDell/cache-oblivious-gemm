@@ -3,3 +3,5 @@ build/
 
 # running scripts
 run.sh
+scripts/
+./main

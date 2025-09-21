@@ -14,14 +14,21 @@ python setup.py install
 
 ### Running the benchmark
 
+Before running the benchmark, you need to configure openmp to make sure **each thread will be bind to each physical CPU core.**
+
+All we need to do is to simply `export` some environment variables:
+
 ```bash
 # env
 export OMP_NUM_THREADS=<your physical CPU core>       # 8 recommended
 export OMP_PLACES=cores                               # mapping to physical cores
 export OMP_PROC_BIND=spread                           # spread to different places
 export OMP_DYNAMIC=FALSE                              # disallow dynamic changing threads
+```
 
-# run the test script
+Then running the benchmark:
+
+```bash
 python main.py
 ```
 
