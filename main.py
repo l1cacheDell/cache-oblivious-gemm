@@ -107,7 +107,7 @@ def check_and_bench(M=512, K=512, N=512, seed=0):
     for version_id in range(1, total_version + 1):     # here, to add more versions, increase the range
         if version_id >= 4:
             check_correctness(A, B, version=version_id)
-        gflops = profile_gemm(A, B, repeat=10, version=version_id)
+        gflops = profile_gemm(A, B, repeat=20, version=version_id)
         bench_data.append((M, f'v{version_id}', gflops))
 
     return bench_data
@@ -142,3 +142,4 @@ if __name__ == "__main__":
     plt.legend(title="Version")
     plt.tight_layout()
     plt.show()
+    plt.savefig("performance_.png", dpi=300)  # save the figure

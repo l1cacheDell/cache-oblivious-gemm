@@ -790,6 +790,12 @@ void sgemm_v7(float* a, float* b, float* c,
 }
 
 // ================================================= v8 ====================================================
+static inline __m128i mask4(int n) {
+    alignas(16) int m[4]={0,0,0,0};
+    for (int i=0;i<n;++i) m[i] = -1;
+    return _mm_load_si128(reinterpret_cast<const __m128i*>(m));
+}
+
 template<int KC_MAX = 64>
 static inline void sgemm_micro_v8_m4n24_colmajor_packB(
     const float* __restrict A,  // [M,K], col-major, lda=M
@@ -813,17 +819,70 @@ static inline void sgemm_micro_v8_m4n24_colmajor_packB(
         alignas(32) float Bpack[KC_MAX * 24];
         // assert(C_K <= (size_t)KC_MAX);  // C_K cannot be more than KC_MAX = 64
 
-        for (int k = 0; k < (int)C_K; ++k) {
-            for (int t = 0; t < jm; ++t) {
-                Bpack[k*24 + t] = B[(size_t)(j0 + t) * ldb + (size_t)k];
-            }
-            for (int t = jm; t < 24; ++t) {
-                Bpack[k*24 + t] = 0.0f; // fill 0 in tail
+        for (int kb = 0; kb < (int)C_K; kb += 8) {
+            const int u = std::min(8, (int)C_K - kb);
+            const __m256i kmask = (u==8) ? _mm256_set1_epi32(-1) : mask8(u);
+
+            // three 8 col-group：0..7, 8..15, 16..23
+            for (int group = 0; group < 3; ++group) {
+                const int gw = (group==0? w0 : group==1? w1 : w2);
+                __m256 c[8];
+                for (int col = 0; col < 8; ++col) {
+                    if (col < gw) {
+                        const float* src = B + (size_t)(j0 + group*8 + col) * ldb + kb; // B[kb:kb+u, j]
+                        c[col] = (u==8) ? _mm256_loadu_ps(src) : _mm256_maskload_ps(src, kmask);
+                    } else {
+                        c[col] = _mm256_setzero_ps();
+                    }
+                }
+                // 8×8 transpose
+                __m256 t0 = _mm256_unpacklo_ps(c[0], c[1]);
+                __m256 t1 = _mm256_unpackhi_ps(c[0], c[1]);
+                __m256 t2 = _mm256_unpacklo_ps(c[2], c[3]);
+                __m256 t3 = _mm256_unpackhi_ps(c[2], c[3]);
+                __m256 t4 = _mm256_unpacklo_ps(c[4], c[5]);
+                __m256 t5 = _mm256_unpackhi_ps(c[4], c[5]);
+                __m256 t6 = _mm256_unpacklo_ps(c[6], c[7]);
+                __m256 t7 = _mm256_unpackhi_ps(c[6], c[7]);
+
+                __m256 s0 = _mm256_shuffle_ps(t0, t2, 0x44);
+                __m256 s1 = _mm256_shuffle_ps(t0, t2, 0xEE);
+                __m256 s2 = _mm256_shuffle_ps(t1, t3, 0x44);
+                __m256 s3 = _mm256_shuffle_ps(t1, t3, 0xEE);
+                __m256 s4 = _mm256_shuffle_ps(t4, t6, 0x44);
+                __m256 s5 = _mm256_shuffle_ps(t4, t6, 0xEE);
+                __m256 s6 = _mm256_shuffle_ps(t5, t7, 0x44);
+                __m256 s7 = _mm256_shuffle_ps(t5, t7, 0xEE);
+
+                __m256 r0 = _mm256_permute2f128_ps(s0, s4, 0x20);
+                __m256 r1 = _mm256_permute2f128_ps(s1, s5, 0x20);
+                __m256 r2 = _mm256_permute2f128_ps(s2, s6, 0x20);
+                __m256 r3 = _mm256_permute2f128_ps(s3, s7, 0x20);
+                __m256 r4 = _mm256_permute2f128_ps(s0, s4, 0x31);
+                __m256 r5 = _mm256_permute2f128_ps(s1, s5, 0x31);
+                __m256 r6 = _mm256_permute2f128_ps(s2, s6, 0x31);
+                __m256 r7 = _mm256_permute2f128_ps(s3, s7, 0x31);
+
+                // write the transposed B pack
+                __m256 rows[8] = {r0,r1,r2,r3,r4,r5,r6,r7};
+                for (int kk = 0; kk < u; ++kk) {
+                    float* dst = Bpack + (size_t)(kb + kk) * 24 + group*8;
+                    _mm256_storeu_ps(dst, rows[kk]);
+                }
             }
         }
 
         for (size_t i0 = 0; i0 < C_M; i0 += 4) {
             const int im = (int)std::min<size_t>(4, C_M - i0);
+
+            // Apack
+            alignas(16) float Apack[KC_MAX * 4];
+            const __m128i rmask4 = (im==4) ? _mm_set1_epi32(-1) : mask4(im);
+            for (int k = 0; k < (int)C_K; ++k) {
+                const float* ap = A + (size_t)k * lda + i0; // A[i0:i0+im, k]
+                __m128 ax = (im==4) ? _mm_loadu_ps(ap) : _mm_maskload_ps(ap, rmask4);
+                _mm_store_ps(Apack + k*4, ax);
+            }
 
             // 12 ymm registers, store 4(row) x 8(per ymm) x 3(col) elements
             __m256 c00 = _mm256_setzero_ps(), c01 = _mm256_setzero_ps(), c02 = _mm256_setzero_ps(); // row 0
@@ -839,30 +898,38 @@ static inline void sgemm_micro_v8_m4n24_colmajor_packB(
                 __m256 b1 = (w1==8) ? _mm256_loadu_ps(bp +  8) : (w1 ? _mm256_maskload_ps(bp +  8, m1) : _mm256_setzero_ps());
                 __m256 b2 = (w2==8) ? _mm256_loadu_ps(bp + 16) : (w2 ? _mm256_maskload_ps(bp + 16, m2) : _mm256_setzero_ps());
 
-                if (im >= 1) {
-                    __m256 a0 = _mm256_broadcast_ss(A + (size_t)k * lda + (i0 + 0));
-                    c00 = _mm256_fmadd_ps(a0, b0, c00);
-                    c01 = _mm256_fmadd_ps(a0, b1, c01);
-                    c02 = _mm256_fmadd_ps(a0, b2, c02);
-                }
-                if (im >= 2) {
-                    __m256 a1 = _mm256_broadcast_ss(A + (size_t)k * lda + (i0 + 1));
-                    c10 = _mm256_fmadd_ps(a1, b0, c10);
-                    c11 = _mm256_fmadd_ps(a1, b1, c11);
-                    c12 = _mm256_fmadd_ps(a1, b2, c12);
-                }
-                if (im >= 3) {
-                    __m256 a2 = _mm256_broadcast_ss(A + (size_t)k * lda + (i0 + 2));
-                    c20 = _mm256_fmadd_ps(a2, b0, c20);
-                    c21 = _mm256_fmadd_ps(a2, b1, c21);
-                    c22 = _mm256_fmadd_ps(a2, b2, c22);
-                }
-                if (im >= 4) {
-                    __m256 a3 = _mm256_broadcast_ss(A + (size_t)k * lda + (i0 + 3));
-                    c30 = _mm256_fmadd_ps(a3, b0, c30);
-                    c31 = _mm256_fmadd_ps(a3, b1, c31);
-                    c32 = _mm256_fmadd_ps(a3, b2, c32);
-                }
+                // load from APack
+                __m128 ax = _mm_load_ps(Apack + k*4); // [a0,a1,a2,a3]
+                // __m128 a0s = _mm_shuffle_ps(ax, ax, _MM_SHUFFLE(0,0,0,0));
+                // __m128 a1s = _mm_shuffle_ps(ax, ax, _MM_SHUFFLE(1,1,1,1));
+                // __m128 a2s = _mm_shuffle_ps(ax, ax, _MM_SHUFFLE(2,2,2,2));
+                // __m128 a3s = _mm_shuffle_ps(ax, ax, _MM_SHUFFLE(3,3,3,3));
+
+                // __m256 a0 = _mm256_broadcastss_ps(a0s);
+                // __m256 a1 = _mm256_broadcastss_ps(a1s);
+                // __m256 a2 = _mm256_broadcastss_ps(a2s);
+                // __m256 a3 = _mm256_broadcastss_ps(a3s);
+
+                __m256 a_used = _mm256_broadcastss_ps(_mm_shuffle_ps(ax, ax, _MM_SHUFFLE(0,0,0,0)));
+
+                c00 = _mm256_fmadd_ps(a_used, b0, c00);
+                c01 = _mm256_fmadd_ps(a_used, b1, c01);
+                c02 = _mm256_fmadd_ps(a_used, b2, c02);
+
+                a_used = _mm256_broadcastss_ps(_mm_shuffle_ps(ax, ax, _MM_SHUFFLE(1,1,1,1)));
+                c10 = _mm256_fmadd_ps(a_used, b0, c10);
+                c11 = _mm256_fmadd_ps(a_used, b1, c11);
+                c12 = _mm256_fmadd_ps(a_used, b2, c12);
+
+                a_used = _mm256_broadcastss_ps(_mm_shuffle_ps(ax, ax, _MM_SHUFFLE(2,2,2,2)));
+                c20 = _mm256_fmadd_ps(a_used, b0, c20);
+                c21 = _mm256_fmadd_ps(a_used, b1, c21);
+                c22 = _mm256_fmadd_ps(a_used, b2, c22);
+
+                a_used = _mm256_broadcastss_ps(_mm_shuffle_ps(ax, ax, _MM_SHUFFLE(3,3,3,3)));
+                c30 = _mm256_fmadd_ps(a_used, b0, c30);
+                c31 = _mm256_fmadd_ps(a_used, b1, c31);
+                c32 = _mm256_fmadd_ps(a_used, b2, c32);
             }
 
             // write to C
@@ -890,6 +957,141 @@ static inline void sgemm_micro_v8_m4n24_colmajor_packB(
     }
 }
 
+template<int KC_MAX=64>
+static inline void sgemm_micro_v8_m24n4_colmajor(
+    const float* __restrict A,  // [M,K], col-major, lda=M
+    const float* __restrict B,  // [K,N], col-major, ldb=K
+    float* __restrict       C,  // [M,N], col-major, ldc=M
+    size_t C_M, size_t C_N, size_t C_K,
+    size_t lda, size_t ldb, size_t ldc)
+{
+    for (size_t j0 = 0; j0 < C_N; j0 += 4) {
+        const int jm = (int)std::min<size_t>(4, C_N - j0);
+
+        // ---- pack B：按 K 每8行打块；每块 4 个向量（每列一个，8 lane）----
+        alignas(32) float Bpack[KC_MAX*4]; // blocks = ceil(K/8)，每块占 4*8=32 个 float
+        // assert(C_K <= (size_t)KC_MAX);
+
+        int bp_ofs = 0;
+        for (int kb = 0; kb < (int)C_K; kb += 8, bp_ofs += 4*8) {
+            const int u = std::min(8, (int)C_K - kb);
+            const __m256i km = (u==8) ? _mm256_set1_epi32(-1) : mask8(u);
+            for (int t = 0; t < 4; ++t) {
+                __m256 v = _mm256_setzero_ps();
+                if (t < jm) {
+                    const float* src = B + (size_t)(j0+t)*ldb + kb; // B[kb:kb+u, col]
+                    v = (u==8) ? _mm256_loadu_ps(src) : _mm256_maskload_ps(src, km);
+                }
+                _mm256_storeu_ps(Bpack + bp_ofs + t*8, v); // 每列一条 8-lane 向量
+            }
+        }
+
+        for (size_t i0 = 0; i0 < C_M; i0 += 24) {
+            const int im = (int)std::min<size_t>(24, C_M - i0);
+            // 三个 8 行条带的实际行数与掩码
+            const int im0 = std::min(8,  im);
+            const int im1 = std::max(0, std::min(8,  im-8));
+            const int im2 = std::max(0, std::min(8,  im-16));
+            const __m256i rm0 = (im0==8)? _mm256_set1_epi32(-1) : mask8(im0);
+            const __m256i rm1 = (im1==8)? _mm256_set1_epi32(-1) : mask8(im1);
+            const __m256i rm2 = (im2==8)? _mm256_set1_epi32(-1) : mask8(im2);
+
+            // 12 个累加器：每列 × 每条带 一个
+            __m256 c00=_mm256_setzero_ps(), c10=_mm256_setzero_ps(), c20=_mm256_setzero_ps(); // col0, stripes 0/1/2
+            __m256 c01=_mm256_setzero_ps(), c11=_mm256_setzero_ps(), c21=_mm256_setzero_ps(); // col1
+            __m256 c02=_mm256_setzero_ps(), c12=_mm256_setzero_ps(), c22=_mm256_setzero_ps(); // col2
+            __m256 c03=_mm256_setzero_ps(), c13=_mm256_setzero_ps(), c23=_mm256_setzero_ps(); // col3
+
+            // 主循环：遍历 K 的 8 行块
+            bp_ofs = 0;
+            for (int kb = 0; kb < (int)C_K; kb += 8, bp_ofs += 4*8) {
+                const int u = std::min(8, (int)C_K - kb);
+                const float* bp = Bpack + bp_ofs;
+
+                for (int kk = 0; kk < u; ++kk) {
+                    // 取 4 个列标量并广播
+                    const float b0s = bp[0*8 + kk];
+                    const float b1s = (jm>=2) ? bp[1*8 + kk] : 0.0f;
+                    const float b2s = (jm>=3) ? bp[2*8 + kk] : 0.0f;
+                    const float b3s = (jm>=4) ? bp[3*8 + kk] : 0.0f;
+
+                    __m256 b0 = _mm256_set1_ps(b0s);
+                    __m256 b1 = _mm256_set1_ps(b1s);
+                    __m256 b2 = _mm256_set1_ps(b2s);
+                    __m256 b3 = _mm256_set1_ps(b3s);
+
+                    // 条带 0：行 i0+0..i0+7
+                    if (im0) {
+                        const float* a0p = A + (size_t)(kb+kk)*lda + i0;
+                        __m256 a0 = (im0==8)? _mm256_loadu_ps(a0p)
+                                            : _mm256_maskload_ps(a0p, rm0);
+                        c00 = _mm256_fmadd_ps(a0, b0, c00);
+                        if (jm>=2) c01 = _mm256_fmadd_ps(a0, b1, c01);
+                        if (jm>=3) c02 = _mm256_fmadd_ps(a0, b2, c02);
+                        if (jm>=4) c03 = _mm256_fmadd_ps(a0, b3, c03);
+                    }
+                    // 条带 1：行 i0+8..i0+15
+                    if (im1) {
+                        const float* a1p = A + (size_t)(kb+kk)*lda + i0 + 8;
+                        __m256 a1 = (im1==8)? _mm256_loadu_ps(a1p)
+                                            : _mm256_maskload_ps(a1p, rm1);
+                        c10 = _mm256_fmadd_ps(a1, b0, c10);
+                        if (jm>=2) c11 = _mm256_fmadd_ps(a1, b1, c11);
+                        if (jm>=3) c12 = _mm256_fmadd_ps(a1, b2, c12);
+                        if (jm>=4) c13 = _mm256_fmadd_ps(a1, b3, c13);
+                    }
+                    // 条带 2：行 i0+16..i0+23
+                    if (im2) {
+                        const float* a2p = A + (size_t)(kb+kk)*lda + i0 + 16;
+                        __m256 a2 = (im2==8)? _mm256_loadu_ps(a2p)
+                                            : _mm256_maskload_ps(a2p, rm2);
+                        c20 = _mm256_fmadd_ps(a2, b0, c20);
+                        if (jm>=2) c21 = _mm256_fmadd_ps(a2, b1, c21);
+                        if (jm>=3) c22 = _mm256_fmadd_ps(a2, b2, c22);
+                        if (jm>=4) c23 = _mm256_fmadd_ps(a2, b3, c23);
+                    }
+                }
+            }
+
+            // 回写：列主序，每列分三段 8 行；执行 C += accum
+            auto add_store_rows8 = [] (float* dst, __m256 v, int rows, __m256i msk){
+                if (!rows) return;
+                if (rows==8) {
+                    _mm256_storeu_ps(dst, _mm256_add_ps(_mm256_loadu_ps(dst), v));
+                } else {
+                    __m256 old = _mm256_maskload_ps(dst, msk);
+                    _mm256_maskstore_ps(dst, msk, _mm256_add_ps(old, v));
+                }
+            };
+
+            float* ccol0 = C + (j0+0)*ldc + i0;
+            float* ccol1 = C + (j0+1)*ldc + i0;
+            float* ccol2 = C + (j0+2)*ldc + i0;
+            float* ccol3 = C + (j0+3)*ldc + i0;
+
+            // col 0
+            add_store_rows8(ccol0 +  0, c00, im0, rm0);
+            add_store_rows8(ccol0 +  8, c10, im1, rm1);
+            add_store_rows8(ccol0 + 16, c20, im2, rm2);
+            if (jm>=2) { // col 1
+                add_store_rows8(ccol1 +  0, c01, im0, rm0);
+                add_store_rows8(ccol1 +  8, c11, im1, rm1);
+                add_store_rows8(ccol1 + 16, c21, im2, rm2);
+            }
+            if (jm>=3) { // col 2
+                add_store_rows8(ccol2 +  0, c02, im0, rm0);
+                add_store_rows8(ccol2 +  8, c12, im1, rm1);
+                add_store_rows8(ccol2 + 16, c22, im2, rm2);
+            }
+            if (jm>=4) { // col 3
+                add_store_rows8(ccol3 +  0, c03, im0, rm0);
+                add_store_rows8(ccol3 +  8, c13, im1, rm1);
+                add_store_rows8(ccol3 + 16, c23, im2, rm2);
+            }
+        }
+    }
+}
+
 template <int BASE = 64>
 void sgemm_v8_recursive(
     const float* __restrict A,  // col-major
@@ -900,7 +1102,8 @@ void sgemm_v8_recursive(
 {
     if (C_M <= (size_t)BASE && C_N <= (size_t)BASE && C_K <= (size_t)BASE) {
         // rolling 4×24 micro-block + B packing
-        sgemm_micro_v8_m4n24_colmajor_packB<BASE>(A, B, C, C_M, C_N, C_K, lda, ldb, ldc);
+        // sgemm_micro_v8_m4n24_colmajor_packB<BASE>(A, B, C, C_M, C_N, C_K, lda, ldb, ldc);
+        sgemm_micro_v8_m24n4_colmajor<BASE>(A, B, C, C_M, C_N, C_K, lda, ldb, ldc);
         return;
     }
 
